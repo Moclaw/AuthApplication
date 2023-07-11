@@ -25,7 +25,6 @@
 **Request Body:**
 
 ```json
-Copy code
 {
   "userName": "string",
   "password": "string"
