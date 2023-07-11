@@ -10,23 +10,35 @@ using Microsoft.AspNetCore.Mvc;
 public class UserController : ControllerBase
 {
     private readonly UserServices _userServices;
-    private readonly IConfiguration _configuration;
-
-    public UserController(IConfiguration configuration)
+    private readonly ILogger<UserController> _logger;
+    public UserController(ILogger<UserController> logger, UserServices userServices)
     {
-        _configuration = configuration;
-        _userServices = new UserServices(configuration);
+        _userServices = userServices;
+        _logger = logger;
     }
 
     [HttpPost("register")]
-    public IActionResult Register(UserPostModel model)
+    public async Task<IActionResult> Register(UserPostModel model)
     {
-		var checkUser = _userServices.CheckUser(model);
-        if (checkUser != AuthApplication.Models.RegisterStatus.Success)
-			return BadRequest(new DefaultRespones  { Message = $"{checkUser.ToString()}" });
+        try
+        {
+            var checkUser = _userServices.CheckUser(model);
+            if (checkUser != RegisterStatus.Success)
+                return BadRequest(new DefaultRespones { Message = $"{checkUser.ToString()}" });
 
-        _userServices.RegisterUser(model);
-        return Ok("User registered successfully");
+            var resutl = await _userServices.RegisterUser(model);
+            if (resutl is null)
+            {
+                return BadRequest(new DefaultRespones { Message = "Something went wrong" });
+            }
+            return Ok(new DefaultRespones { Message = "Register Successfully", Data = resutl});
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex.Message);
+			return BadRequest(new DefaultRespones { Message = "Something went wrong" });
+        }
+		
     }
 
     [HttpPost("login")]
@@ -35,8 +47,24 @@ public class UserController : ControllerBase
         var result = _userServices.LoginUser(user);
 
         if(result is null)
-            return BadRequest(new DefaultRespones { Data = string.Empty, Message = "Somethingwentwrong" });
+			return BadRequest(new DefaultRespones { Message = "Login failure" });
 
         return Ok(new DefaultRespones { Data = result, Message = "Login successfully" });
     }
+	[Authorize]
+	[HttpGet("getall")]
+	public IActionResult GetAll()
+	{
+		var users = _userServices.GetAll();
+		return Ok(new DefaultRespones { Data = users, Message = "Get all users successfully" });
+	}
+
+	[Authorize]
+	[HttpGet("logout")]
+	public IActionResult Logout()
+	{
+        _logger.LogError(null, string.Empty);
+        return Ok(new DefaultRespones { Message = "Logout successfully" });
+	}
+
 }

@@ -9,92 +9,82 @@ using System.IdentityModel.Tokens.Jwt;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 using AuthApplication.Models.Respones;
+using AuthApplication.Services;
 
-public class UserServices
+public class UserServices : BaseServices<User>
 {
-    private List<User> _users;
-    private readonly string _filePath;
-    private readonly IConfiguration _configuration;
-
-    public UserServices(IConfiguration configuration)
+    private readonly List<User> _users = new List<User>();
+    private readonly string _screctKey = string.Empty;
+    private readonly string _encryptKey = string.Empty;
+    public UserServices(ApplicationDbContext context, IConfiguration configuration, ILogger<User> logger) : base(context, configuration, logger)
     {
-        _filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "users.json");
-        LoadUsers();
-        _configuration = configuration;
+        _users = db.Users.ToList();
+        _screctKey = configuration["Jwt:SignKey"] ?? "";
+        _encryptKey = configuration["SecrectKey"] ?? string.Empty;
     }
-    private void LoadUsers()
+    public async Task<LoginResponse?> RegisterUser(UserPostModel user)
     {
-        if (File.Exists(_filePath))
+        var password = CryptoHelper.Encrypt(user?.Password ?? "", _encryptKey);
+
+        var newUser = new User
         {
-            try
+            UserName = user?.Username,
+            Email = user?.Email,
+            PhoneNumber = user?.PhoneNumber,
+            Password = password,
+            Address = user?.Address,
+            CreatedDate = DateTime.UtcNow,
+        };
+        if (await InsertAsync(newUser))
+        {
+            var userId = _users?.FirstOrDefault(c => c.UserName == user?.Username && c.Password == password)?.Id;
+            var token = GetToken(userId?.ToString() ?? "");
+
+            return new LoginResponse
             {
-                var json = File.ReadAllText(_filePath);
-                var usersWrapper = JsonSerializer.Deserialize<UsersWrapper>(json);
-                _users = usersWrapper?.Users ?? new List<User>();
-            }
-            catch (Exception)
-            {
-                _users = new List<User>();
-                throw;
-            }
+                Token = token,
+                User = newUser
+            };
         }
-        else
-        {
-            _users = new List<User>();
-        }
-    }
-
-    public List<User> GetAllUsers()
-    {
-        return _users;
-    }
-
-    private void SaveUsers()
-    {
-        var usersWrapper = new UsersWrapper { Users = _users };
-        var json = JsonSerializer.Serialize(usersWrapper);
-        File.WriteAllText(_filePath, json);
-    }
-
-    public void RegisterUser(UserPostModel user)
-    {
-        var encryptedPassword = Crypto.Encrypt(user?.Password);
-        var id = _users?.Count ?? 0;
-        _users.Add(new User
-        {
-            Id = id++,
-            Email = user.Email,
-            UserName = user.Username,
-            Password = encryptedPassword,
-            PhoneNumber = user.PhoneNumber,
-            Address = user.Address
-        });
-        SaveUsers();
+        return null;
     }
 
     public LoginResponse? LoginUser(LoginModel model)
     {
-        if (model.Password is null || model.UserName is null) return null;
-
-        var encryptedPassword = Crypto.Encrypt(model.Password);
-        var user = _users.FirstOrDefault(x => x.UserName == model.UserName && x.Password == encryptedPassword);
-
-        if (user == null)
+        var user = _users.SingleOrDefault(x => x.UserName == model?.UserName);
+        var password = CryptoHelper.Decrypt(user?.Password ?? "", _encryptKey) == model.Password;
+        if (user != null)
         {
-            return null;
+            if (!password)
+                return null;
+            var token = GetToken(user?.Id.ToString() ?? "");
+            return new LoginResponse
+            {
+                Token = token,
+                User = user
+            };
         }
-		var token = GetToken(user);
-        return new LoginResponse
-		{
-			Token = token,
-			User = new User
-			{
-				Email = user.Email,
-				UserName = user.UserName,
-				PhoneNumber = user.PhoneNumber,
-				Address = user.Address
-			}
-		};
+        return null;
+    }
+
+    private string GetToken(string userId)
+    {
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Audience = null,            // Not required as no third-party is involved
+            IssuedAt = DateTime.Now,
+            NotBefore = DateTime.Now,
+            Expires = DateTime.Now.AddDays(5),
+            Subject = new ClaimsIdentity(new List<Claim>
+            {
+                new Claim("userId", userId),
+                new Claim("role", "User")
+            }),
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(System.Convert.FromBase64String(_screctKey)), SecurityAlgorithms.HmacSha256Signature)
+        };
+        var createdToken = tokenHandler.CreateToken(tokenDescriptor);
+        return tokenHandler.WriteToken(createdToken);
     }
 
     public RegisterStatus CheckUser(UserPostModel user)
@@ -104,12 +94,12 @@ public class UserServices
             return RegisterStatus.UserIsExist;
         }
 
-        if (!Regex.IsMatch(user?.Email, @"^([\w\.\-]+)@([\w\-]+)((\.(\w){2,3})+)$"))
+        if (!Regex.IsMatch(user?.Email ?? "", @"^([\w\.\-]+)@([\w\-]+)((\.(\w){2,3})+)$"))
         {
             return RegisterStatus.EmailIsNotValid;
         }
 
-        if (!Regex.IsMatch(user?.Password, @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,15}$"))
+        if (!Regex.IsMatch(user?.Password ?? "", @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,15}$"))
         {
             return RegisterStatus.PasswordIsNotValid;
         }
@@ -119,60 +109,16 @@ public class UserServices
             return RegisterStatus.PasswordConfirmIsNotMatch;
         }
 
-        if (!Regex.IsMatch(user?.PhoneNumber, @"^(0[1-9])+([0-9]{8})$"))
+        if (!Regex.IsMatch(user?.PhoneNumber ?? "", @"^(0[1-9])+([0-9]{8})$"))
         {
             return RegisterStatus.PhoneIsNotValid;
         }
 
-        if (!Regex.IsMatch(user?.Username, @"^[a-zA-Z0-9]{5,}$"))
-        {
+        if (!Regex.IsMatch(user?.Username ?? "", @"^[a-zA-Z0-9]{5,}$"))
             return RegisterStatus.UserNameIsNotValid;
-        }
 
         return RegisterStatus.Success;
     }
 
-    public string GetToken(User user)
-	{
-		var tokenHandler = new JwtSecurityTokenHandler();
-		var key = Encoding.ASCII.GetBytes(_configuration["Jwt:Key"]);
-		var tokenDescriptor = new SecurityTokenDescriptor
-		{
-			Subject = new ClaimsIdentity(new Claim[]
-			{
-				new Claim(ClaimTypes.Name, user?.UserName),
-				new Claim(ClaimTypes.Email, user?.Email),
-				new Claim(ClaimTypes.MobilePhone, user?.PhoneNumber)
-			}),
-			Expires = DateTime.UtcNow.AddDays(7),
-			SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
-		};
-		var token = tokenHandler.CreateToken(tokenDescriptor);
-		return tokenHandler.WriteToken(token);
-	}
 
-    public class UsersWrapper
-    {
-        public List<User> Users { get; set; }
-    }
-
-    public static class Crypto
-    {
-        public static string Encrypt(string password)
-        {
-            if (password == null)
-                return string.Empty;
-			using (SHA256 sha256Hash = SHA256.Create())
-			{
-				byte[] bytes = sha256Hash.ComputeHash(Encoding.UTF8.GetBytes(password));
-				StringBuilder builder = new StringBuilder();
-				foreach (byte b in bytes)
-				{
-					builder.Append(b.ToString("x2"));
-				}
-				password = builder.ToString();
-			}
-            return password;
-        }
-    }
 }
