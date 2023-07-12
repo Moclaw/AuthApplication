@@ -25,31 +25,6 @@ jobs:
         run: dotnet build --no-restore
       - name: Test
         run: dotnet test --no-build --verbosity normal
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v3
-        with:
-          dotnet-version: 6.0.x
-      - name: Restore dependencies
-        run: dotnet restore
-      - name: Build
-        run: dotnet build --no-restore
-      - name: Publish
-        run: dotnet publish --no-build --configuration Release --output ./publish
-      - name: Deploy to server
-        # Add your deployment steps here, such as copying files to the server or using deployment scripts
-        # Once the deployment is complete, extract the URL of the deployed application
-        # For example, you can set the URL as an output variable
-        id: deployment
-        run: |
-          echo "::set-output name=app_url::https://your-deployed-app-url.com"
       - name: Display deployed URL
         run: |
           echo "Deployed application URL: ${{ needs.deploy.outputs.app_url }}"
